@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Numeric, DateTime, Text, ForeignKey
+from sqlalchemy import Column, Integer, String, Numeric, DateTime, Text, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -46,5 +46,3 @@ class ScoreCache(Base):
     def __repr__(self):
         return f"<ScoreCache {self.entity_type}:{self.entity_id} = {self.score}>"
 
-
-from sqlalchemy import Boolean
