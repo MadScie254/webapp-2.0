@@ -1,0 +1,146 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: commons-postgres
+    environment:
+      POSTGRES_USER: commons
+      POSTGRES_PASSWORD: commonspassword
+      POSTGRES_DB: commons_ledger
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U commons"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - commons-network
+
+  # Redis Cache & Queue
+  redis:
+    image: redis:7-alpine
+    container_name: commons-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - commons-network
+
+  # MinIO Object Storage (S3-compatible)
+  minio:
+    image: minio/minio:latest
+    container_name: commons-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    volumes:
+      - minio-data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - commons-network
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: commons-backend
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://commons:commonspassword@postgres:5432/commons_ledger
+      - REDIS_URL=redis://redis:6379/0
+      - MINIO_ENDPOINT=minio:9000
+    volumes:
+      - ./backend:/app
+      - ml-models:/app/models
+      - uploads:/app/uploads
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - commons-network
+
+  # Celery Worker (Background Tasks)
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: commons-celery-worker
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://commons:commonspassword@postgres:5432/commons_ledger
+      - REDIS_URL=redis://redis:6379/0
+      - MINIO_ENDPOINT=minio:9000
+    volumes:
+      - ./backend:/app
+      - ml-models:/app/models
+      - uploads:/app/uploads
+    depends_on:
+      - postgres
+      - redis
+      - minio
+    command: celery -A app.celery_app worker --loglevel=info
+    networks:
+      - commons-network
+
+  # Next.js Frontend (PWA)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: commons-frontend
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_APP_NAME=Commons Ledger
+      - NEXT_PUBLIC_APP_URL=http://localhost:3000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    command: npm run dev
+    networks:
+      - commons-network
+
+networks:
+  commons-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  ml-models:
+  uploads:
